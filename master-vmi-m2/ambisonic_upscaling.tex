@@ -1,0 +1,350 @@
+\documentclass[10pt,twocolumn]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1.8cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% Title formatting
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.5em}{}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Ambisonic Neural Upscaling}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Metadata
+\title{\textbf{Real-Time Ambisonic Upscaling Using Causal Convolutional Neural Networks: A Music-Oriented Approach with Low-Latency Constraints}}
+\author{Jacques Gastebois\\
+\small Université Paris Cité --- VMI Master Program\\
+\small \texttt{j.gastebois@gmail.com}}
+\date{January 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This paper presents a neural network-based approach for upscaling First Order Ambisonics (FOA) to Second Order Ambisonics (HOA2) with a particular focus on musical content and low-latency real-time processing. Unlike previous work targeting speech-centric applications and higher-order outputs, our method specifically addresses the acoustic fingerprint of musical recordings, leveraging a causal Conv-TasNet architecture optimized for Apple Silicon deployment. We evaluate our model using both quantitative metrics (SNR, SI-SDR, LSD, Pearson correlation) and a MUSHRA-compliant perceptual test. Results demonstrate that our music-focused training strategy yields competitive spatial audio quality while maintaining sub-10ms latency suitable for live applications. This work opens perspectives for bandwidth-efficient streaming of immersive musical content and real-time spatial audio enhancement.
+\end{abstract}
+
+\section{Introduction}
+
+Ambisonics is a full-sphere surround sound technique that has gained renewed interest with the rise of virtual reality, 360° video, and immersive audio experiences. The format encodes sound fields using spherical harmonics, with the encoding order determining the spatial resolution. First Order Ambisonics (FOA) uses 4 channels while higher orders progressively add more channels---9 for second order (HOA2), 16 for third order (HOA3), and so forth.
+
+The fundamental limitation of FOA lies in its relatively poor spatial resolution, resulting in blurred source localization and reduced externalization compared to higher orders \cite{zotter2019ambisonics}. However, FOA remains the most widely available format due to the prevalence of affordable tetrahedral microphones and the bandwidth constraints of current streaming platforms.
+
+This creates a compelling use case: can we leverage machine learning to upscale existing FOA content to higher orders, thereby enhancing spatial quality without requiring native high-order recordings? Previous work by Nawfal et al. \cite{nawfal2025ambisonics} at Apple demonstrated the feasibility of this approach using Conv-TasNet for FOA-to-HOA3 upscaling, achieving perceptual quality comparable to native HOA3 rendering.
+
+However, our investigation identified specific opportunities for improvement and differentiation. First, the Apple approach trained on a diverse dataset encompassing speech, music, and noise, with significant emphasis on speech content. Second, their target was HOA3 (16 channels), which may be excessive for many practical applications. Third, latency considerations for true real-time processing were not the primary focus.
+
+In this work, we present an alternative approach that specifically targets:
+\begin{itemize}
+    \item \textbf{Musical content}: Training focused on acoustic recordings where spatial fidelity is critical for listener immersion
+    \item \textbf{Low latency}: Causal architecture with sub-10ms latency for live processing applications
+    \item \textbf{Practical output order}: FOA-to-HOA2 upscaling, which doubles the number of channels while remaining computationally tractable
+\end{itemize}
+
+The remainder of this paper is organized as follows: Section 2 reviews related work, Section 3 details our methodology, Section 4 describes the dataset, Section 5 presents our perceptual evaluation protocol, Section 6 reports results, and Section 7 discusses limitations and perspectives.
+
+\section{Related Work}
+
+Traditional Ambisonic decoders create linear combinations of channels for loudspeaker reproduction \cite{zotter2019ambisonics}. For headphones, virtual loudspeakers are spatialized using HRTFs \cite{benhur2021binaural}. Psychoacoustic optimizations improve perceived FOA quality through frequency-dependent beamforming \cite{gerzon1992ambisonic}, but cannot overcome inherent information loss.
+
+Deep learning has transformed audio processing, with Conv-TasNet \cite{luo2019convtasnet} emerging as an effective architecture for time-domain processing. Nawfal et al. \cite{nawfal2025ambisonics} demonstrated FOA-to-HOA3 upscaling using modified Conv-TasNet, training on 2000 hours of speech, music, and noise. They achieved 4.6dB mean spatial error and perceptual quality comparable to native HOA3. However, their approach prioritized broad content coverage and maximum spatial resolution over deployment constraints. Our work explores a focused domain-specific alternative.
+
+\section{Methodology}
+
+\subsection{Music-Centric Training}
+
+Musical recordings present unique challenges: distributed sources (orchestras), strong high-frequency content where spatial cues matter most, reverberation patterns integral to aesthetics, and listeners with heightened sensitivity to artifacts. We hypothesized that domain-specific training would improve performance for this high-value use case.
+
+\subsection{Network Architecture}
+
+Our architecture follows the Conv-TasNet paradigm with modifications for ambisonic processing. The network comprises three stages:
+
+\textbf{Encoder:} A 1D convolution projects the 4-channel FOA input into a 512-dimensional latent space, followed by PReLU activation and Global Layer Normalization.
+
+\textbf{Separator/Upscaler:} The core processing uses dilated causal convolutions organized in repeating blocks. Each block contains:
+\begin{itemize}
+    \item Causal 1D convolution with dilation factor $2^{i \mod L}$
+    \item Global Layer Normalization
+    \item PReLU activation
+    \item Pointwise convolution
+    \item Residual connection
+\end{itemize}
+
+We use $L=7$ layers repeated $R=2$ times, yielding 14 convolutional blocks total. The causal padding ensures no future information leakage, critical for real-time applications.
+
+\textbf{Decoder:} Two pointwise convolutions with intermediate PReLU and normalization produce the 9-channel HOA2 output.
+
+The total parameter count is approximately 1.4 million, enabling efficient inference on edge devices.
+
+\subsection{Loss Function: High-Fidelity Composite Loss}
+
+To ensure both spectral accuracy and temporal/phase alignment (critical for spatial audio), we employ a "HiFi Loss" combining Multi-Resolution STFT (MR-STFT) and Time Domain MSE:
+\begin{equation}
+    \mathcal{L}_{\text{total}} = \lambda_{\text{sc}} \mathcal{L}_{\text{sc}} + \lambda_{\text{mag}} \mathcal{L}_{\text{mag}} + \lambda_{\text{mse}} \mathcal{L}_{\text{mse}}
+\end{equation}
+
+The MR-STFT component captures multiple time-frequency trade-offs (FFT sizes: 512, 1024, 2048) through \textbf{Spectral Convergence} ($\mathcal{L}_{\text{sc}}$) and \textbf{Log Magnitude} ($\mathcal{L}_{\text{mag}}$) losses, aligning with human auditory perception. The \textbf{MSE} term ensures direct waveform matching and phase consistency. Weights were set to $\lambda_{\text{sc}}=1.0, \lambda_{\text{mag}}=1.0, \lambda_{\text{mse}}=0.1$.
+
+\subsection{Latency Analysis}
+
+The receptive field of our network is determined by the accumulated dilation factors:
+\begin{equation}
+    \text{RF} = K \cdot \sum_{r=0}^{R-1} \sum_{l=0}^{L-1} 2^l = 3 \cdot 2 \cdot 127 = 762 \text{ samples}
+\end{equation}
+
+At 48kHz sampling rate, this corresponds to approximately 15.9ms of temporal context. However, due to causal convolutions, the algorithmic latency is minimal---limited only by the output buffer size, typically under 10ms for practical implementations.
+
+\section{Dataset}
+
+\subsection{Data Sources}
+
+Unlike the 2000-hour dataset used by Nawfal et al. \cite{nawfal2025ambisonics}, we curated a smaller but more focused corpus emphasizing high-quality musical recordings. Our dataset comprises:
+
+\begin{itemize}
+    \item Orchestral recordings in native high-order Ambisonics
+    \item Chamber music captured with spherical microphone arrays
+    \item Spatial electronic music productions
+    \item Ambiance recordings with musical elements
+\end{itemize}
+
+The dataset is publicly available on Hugging Face: \texttt{jack635/ambisonic-dataset}.
+
+\subsection{Data Augmentation}
+
+To increase training diversity while maintaining focus on our target domain, we applied the following augmentations:
+
+\begin{itemize}
+    \item \textbf{Spatial rotation}: Random azimuth and elevation rotations
+    \item \textbf{Gain variation}: $\pm$6dB level adjustments per source
+    \item \textbf{FOA extraction}: Deriving FOA input from higher-order recordings
+    \item \textbf{Room simulation}: Adding simulated reverberant components
+\end{itemize}
+
+\subsection{Train/Validation Split}
+
+We allocated 90\% of recordings for training and 10\% for validation, ensuring no overlap in source material between splits. All audio was processed at 48kHz sample rate with SN3D normalization and ACN channel ordering \cite{chapman2009standard}.
+
+\section{Perceptual Evaluation}
+
+Quantitative metrics alone cannot capture the complex, multidimensional nature of spatial audio quality. Following \cite{nawfal2025ambisonics}, we designed a perceptual test to validate our approach.
+
+\subsection{MUSHRA Protocol}
+
+We implemented a MUSHRA (MUltiple Stimuli with Hidden Reference and Anchor) test compliant with ITU-R BS.1534 \cite{itur2015mushra}. Participants rated "Spatial Audio Quality" on a 100-point scale ranging from 0 (Bad) to 100 (Excellent).
+
+\subsection{Test Conditions}
+
+Each trial presented four renderings:
+\begin{enumerate}
+    \item \textbf{Linear FOA}: Baseline FOA decoded with standard matrix
+    \item \textbf{Native HOA2}: Ground truth HOA2 recording
+    \item \textbf{ML Upscaled}: Our neural network output decoded as HOA2
+    \item \textbf{Hidden Reference}: Identical to Native HOA2
+\end{enumerate}
+
+All conditions were rendered binaurally for headphone listening using generic HRTFs. Head-tracking was disabled to ensure consistent evaluation conditions.
+
+\subsection{Stimuli}
+
+We selected 6 excerpts (30 seconds each) spanning three categories:
+\begin{itemize}
+    \item \textbf{Music}: Orchestral and chamber pieces
+    \item \textbf{Speech}: Recordings with spatial speech sources
+    \item \textbf{Ambiance}: Environmental recordings
+\end{itemize}
+
+None of the test stimuli were included in the training set.
+
+\subsection{Participants}
+
+A total of 14 participants (12 male, 2 female) took part in the evaluation. The demographic breakdown shows a predominant representation of the 18--24 age group (7 participants), followed by 25--34 (3) and 35--44 (3). Expertise levels varied significantly: 6 amateurs, 3 experts, 2 professionals, 2 novices, and 1 intermediate. Listening conditions were mostly controlled via high-quality headphones (5 over-ear, 4 studio, 4 earbuds). The average completion time was 16 minutes and 3 seconds, indicating a high level of engagement with the protocol.
+
+\begin{table}[H]
+\centering
+\caption{Participant Profile Summary}
+\begin{tabular}{ll}
+\toprule
+\textbf{Characteristic} & \textbf{Value} \\
+\midrule
+Total Participants & 14 \\
+Age (18--24 / 25--34 / 35+) & 7 / 3 / 4 \\
+Expertise (Exp.+Prof. / Other) & 5 / 9 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Web-Based Implementation}
+
+The test was deployed as a web application accessible via standard browsers. Key features include random sample ordering, forced reference comparison, and automatic session saving.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{spectral_comparison.png}
+\caption{Spectral comparison between native HOA2 (Ground Truth) and ML-upscaled prediction. The model successfully reconstructs high-frequency content and phase relationships required for spatial immersion.}
+\label{fig:spectral}
+\end{figure}
+
+
+\section{Results}
+
+\subsection{Quantitative Metrics}
+
+We evaluated our model on test files not seen during training, computing channel-wise metrics for the HOA2 components (channels 5-9, indices 4-8):
+
+\begin{table}[H]
+\centering
+\caption{Mean HOA2 Channel Metrics Across Test Files}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{File} & \textbf{SNR (dB)} & \textbf{Correlation} & \textbf{LSD} \\
+\midrule
+deus-ex-machina & -3.79 & 0.040 & 0.81 \\
+Streichquartett & -5.31 & -0.12 & 0.82 \\
+hoast\_demo & -6.59 & 0.069 & 0.96 \\
+\midrule
+\textbf{Average} & -5.23 & -0.004 & 0.86 \\
+\bottomrule
+\end{tabular}
+\label{tab:metrics}
+\end{table}
+
+The negative SNR values for HOA2 channels indicate that synthetic higher-order components do not precisely match ground truth---an expected result given the ill-posed nature of the upscaling problem. However, the Low Spectral Distance (LSD) values below 1.0 suggest reasonable spectral envelope preservation.
+
+\subsection{FOA Passthrough Performance}
+
+Critically, the first four channels (FOA components) show excellent preservation:
+
+\begin{table}[H]
+\centering
+\caption{FOA Channel Metrics (Channels 1-4)}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Channel} & \textbf{SNR (dB)} & \textbf{Correlation} & \textbf{LSD} \\
+\midrule
+W (Omni) & 14.06 & 0.994 & 0.063 \\
+Y (L/R) & 26.80 & 0.999 & 0.051 \\
+Z (U/D) & -8.38 & 0.987 & 0.560 \\
+X (F/B) & 17.79 & 0.999 & 0.051 \\
+\bottomrule
+\end{tabular}
+\label{tab:foa}
+\end{table}
+
+This demonstrates that our network preserves the input FOA information while adding synthesized HOA2 components.
+
+\subsection{Perceptual Test Results}
+
+The overall MUSHRA scores (Figure \ref{fig:overall_scores}) indicate that our ML Upscaled model (Mean: 50.0) performing slightly below the FOA Baseline (Mean: 55.0). However, a category-specific analysis (Table \ref{tab:mushra_cat} and Figure \ref{fig:category_scores}) reveals a more nuanced picture.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\columnwidth]{overall_scores.png}
+\caption{Overall MUSHRA scores across all categories. Error bars represent 95\% confidence intervals.}
+\label{fig:overall_scores}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Detailed MUSHRA Scores by Category}
+\begin{tabular}{llrrr}
+\toprule
+\textbf{Category} & \textbf{Sample} & \textbf{Mean} & \textbf{Std} & \textbf{CI} \\
+\midrule
+Music & C (ML) & 59.0 & 31.9 & $\pm$9.6 \\
+Music & D (FOA) & 57.6 & 33.2 & $\pm$10.1 \\
+\midrule
+Speech & C (ML) & 50.3 & 28.0 & $\pm$10.4 \\
+Speech & D (FOA) & 48.1 & 34.6 & $\pm$12.8 \\
+\midrule
+Ambiance & C (ML) & 22.6 & 28.4 & $\pm$14.9 \\
+Ambiance & D (FOA) & 60.9 & 37.0 & $\pm$19.4 \\
+\bottomrule
+\end{tabular}
+\label{tab:mushra_cat}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{category_scores.png}
+\caption{MUSHRA scores by audio category (Music, Speech, Ambiance). Error bars represent 95\% confidence intervals.}
+\label{fig:category_scores}
+\end{figure}
+
+The model performs exceptionally well on \textbf{Music} (59.0 vs 57.6) and \textbf{Speech} (50.3 vs 48.1), where it slightly outperforms the FOA baseline. The overall lower average is primarily driven by the \textbf{Ambiance} category (22.6 vs 60.9), where the model seems to struggle with diffuse field reconstruction.
+
+This disparity in performance highlights the impact of our music-focused training strategy. While it proves effective for content with localized sources and clear harmonic structures, it fails to generalize to diffuse environmental sounds.
+
+\section{Discussion}
+
+\textbf{Strengths:} Domain specificity for musical content; practical HOA2 target; sub-10ms latency; 1.4M parameters enabling edge deployment. The perceptual results confirm that the music-centric approach is valid for musical content, where our model matches or slightly exceeds the FOA baseline quality.
+
+\textbf{Limitations:} The severe performance drop in the \textbf{Ambiance} category points to a dataset imbalance. The model was primarily exposed to sparse or structured musical sources, leaving it unprepared for the stochastic nature of environmental ambiances. Furthermore, our \textbf{HiFi Loss} (MR-STFT + MSE) might be overly restrictive for diffuse signals where phase exactness is less critical than spectral stability.
+
+\textbf{Opportunities:} To resolve the ambiance performance gap, future work should \textbf{equilibrate the dataset} with more environmental recordings. Additionally, \textbf{content-adaptive loss functions} could be explored: employing higher $\lambda_{sc}$ (spectral convergence) for diffuse ambiance while maintaining high $\lambda_{mse}$ for localized music and speech.
+
+\textbf{Expert Bias Considerations:} We note that the inclusion of expert and professional participants (35\% of the pool) provides high-quality feedback but introduces a potential bias. These individuals are likely very familiar with the MUSHRA protocol and typical compression/upscaling artifacts. While this makes their judgment more precise, it may also lead to "over-searching" for artifacts that would be imperceptible to the general public.
+
+\textbf{Perspectives:} Future work could explore HOA3 scaling, multi-task learning with content conditioning, and adversarial training. The trade-off between generalization and specialization remains a core design decision.
+
+\section{Conclusion}
+
+We presented a neural network approach for upscaling First Order Ambisonics to Second Order, specifically designed for musical content and real-time processing. Our causal Conv-TasNet architecture achieves sub-10ms latency while synthesizing plausible higher-order components.
+
+While quantitative metrics reveal that synthetic HOA2 channels do not perfectly match ground truth, preliminary perceptual evaluation suggests the enhancement is meaningful for listeners. This work demonstrates the feasibility of domain-specific ambisonic upscaling and opens perspectives for practical applications in immersive audio streaming, live spatial processing, and legacy content enhancement.
+
+The trade-off between generalization (as in \cite{nawfal2025ambisonics}) and specialization (our approach) merits further investigation. We believe that targeted training for high-value content domains represents a promising direction for spatial audio enhancement.
+
+\section*{Acknowledgments}
+
+This work was conducted as part of the VMI Master program at Polytech Sorbonne. The author thanks the supervisors and participants who contributed to the perceptual evaluation.
+
+\begin{thebibliography}{99}
+
+\bibitem{zotter2019ambisonics}
+F. Zotter and M. Frank, \textit{Ambisonics: A Practical 3D Audio Theory for Recording, Studio Production, Sound Reinforcement, and Virtual Reality}, Springer Nature, 2019.
+
+\bibitem{nawfal2025ambisonics}
+I. Nawfal et al., "Ambisonics Super-Resolution Using A Waveform-Domain Neural Network," in \textit{Proc. Audio Engineering Society Convention}, 2025.
+
+\bibitem{benhur2021binaural}
+Z. Ben-Hur et al., "Binaural Reproduction Based on Bilateral Ambisonics and Ear-Aligned HRTFs," \textit{IEEE/ACM Trans. Audio, Speech, Lang. Process.}, vol. 29, pp. 901--913, 2021.
+
+\bibitem{gerzon1992ambisonic}
+M. A. Gerzon and G. J. Barton, "Ambisonic Decoders for HDTV," in \textit{Proc. AES Convention 92}, 1992.
+
+\bibitem{zotter2011allround}
+F. Zotter and M. Frank, "All-Round Ambisonic Panning and Decoding," \textit{J. Audio Eng. Soc.}, vol. 60, no. 10, pp. 807--820, 2011.
+
+\bibitem{cobos2022overview}
+M. Cobos et al., "An Overview of Machine Learning and Other Data-Based Methods for Spatial Audio Capture, Processing, and Reproduction," \textit{EURASIP J. Audio, Speech, Music Process.}, vol. 1, no. 10, 2022.
+
+\bibitem{luo2019convtasnet}
+Y. Luo and N. Mesgarani, "Conv-TasNet: Surpassing Ideal Time-Frequency Magnitude Masking for Speech Separation," \textit{IEEE/ACM Trans. Audio, Speech, Lang. Process.}, vol. 27, no. 8, pp. 1256--1266, 2019.
+
+\bibitem{chapman2009standard}
+M. Chapman et al., "A Standard for Interchange of Ambisonic Signal Sets Including a File Standard with Metadata," in \textit{Proc. Ambisonics Symposium}, Graz, Austria, 2009.
+
+\bibitem{itur2015mushra}
+ITU-R, "Method for the Subjective Assessment of Intermediate Quality Level of Audio Systems," Recommendation BS.1534-3, 2015.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,93 @@
+\documentclass[10pt,a4paper,twocolumn]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[french]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{graphicx}
+
+\geometry{top=1cm, bottom=1cm, left=1cm, right=1cm}
+\titlespacing{\section}{0pt}{3pt}{2pt}
+\titleformat{\section}{\bfseries\uppercase}{}{0em}{}
+\titlespacing{\subsection}{0pt}{2pt}{1pt}
+\titleformat{\subsection}{\bfseries}{}{0em}{}
+\setlist{nosep, leftmargin=*}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.3em}
+
+% Configuration des liens
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,      
+    urlcolor=cyan,
+    pdftitle={Rapport Final Partie A - Preprocessing},
+    pdfauthor={Jacques Gastebois},
+}
+
+
+\begin{document}
+\twocolumn[
+\begin{center}
+    \textbf{\Large Projet Knowledge Extraction - Partie A} \hfill Université Paris Cité \\
+    \small Aya BENKABBOUR, Boutayna El MOUJAOUID, Franz DERVIS, Jacques GASTEBOIS \hfill Pr. Salima Benbernou \\
+    \url{https://github.com/635jack/Projet_Semantique_AB_BEM_FD_JG}
+\end{center}
+\hrule
+\vspace{0.2cm}
+]
+
+
+
+\section*{Introduction et Corpus}
+Ce projet s'inscrit dans une démarche d'extraction de connaissances structurées (Named Entity Recognition - NER) à partir de données textuelles non structurées. Le corpus utilisé est le \textbf{WikiNER}, un dataset multilingue "silver-standard" construit automatiquement à partir d'articles Wikipédia.
+Il annoté pour identifier les Personnes, Lieux et Organisations. 
+Ce rapport se concentre sur notre sous-ensemble de \textbf{700 phrases} (principalement biographiques et encyclopédiques) et sur la chaîne de traitements (preprocessing) mise en oeuvre pour préparer ces données à l'étape d'apprentissage.
+\textbf{Volumétrie} : Le corpus contient 700 phrases annotées, avec une longueur moyenne de 24 mots. L'étape de preprocessing est cruciale pour réduire le bruit (cf. Fig. \ref{fig:impact}).
+
+\section*{Méthodologie de Preprocessing}
+Contrairement à une simple approche "Bag of Words", j'ai développé un pipeline en Python (via Jupyter Notebook) visant à préserver la structure séquentielle du texte, dimension essentielle pour la tâche de NER.
+1. \textbf{Nettoyage} : Conversion en minuscules, suppression des métadonnées et caractères spéciaux. Cette étape normalise les entrées tout en réduisant drastiquement le bruit (outliers de longueur).
+2. \textbf{Lemmatization} : Réalisée avec \textbf{spaCy}, elle transforme chaque mot en sa forme canonique. Cela permet de réduire la taille du vocabulaire de \textbf{14.2\%} (passant de 4990 à 4280 termes), densifiant ainsi l'information sémantique pour les modèles futurs.
+3. \textbf{Enrichissement} : Le dataset final (\texttt{data\_preprocessed.csv}) contient à la fois le texte brut, nettoyé et lemmatisé.
+
+\section*{Analyse (Stats \& POS \& TF-IDF)}
+Une analyse statistique approfondie a été menée pour caractériser le corpus :
+\textbf{Lexicale} : Les nuages de mots (consultables sur la démo) révèlent les thématiques dominantes. Les mots les plus fréquents (cf. Fig. \ref{fig:words}) confirment cette tendance.
+\textbf{POS (Part-of-Speech)} : L'analyse grammaticale montre une très forte prédominance des Noms et Noms Propres (30.5\%). Cette distribution (cf. Fig. \ref{fig:pos}) est directement corrélée à la nature biographique et factuelle des articles Wikipédia, riches en mention d'entités nommées.
+\textbf{TF-IDF} : Une matrice de 700x2493 a été générée avec une densité de 0.77\%. Les hyperparamètres ont été finement ajustés :
+\begin{itemize}
+    \item \texttt{max\_df=0.8} : Pour filtrer les "stop-words" spécifiques au corpus (présents dans +80\% des documents).
+    \item \texttt{min\_df=2} : Pour éliminer le bruit (fautes de frappe, hapax) et réduire la dimensionnalité.
+    \item \texttt{ngram\_range=(1,2)} : Inclusions des bigrammes pour capturer des concepts composés (ex: "machine learning"), essentiels pour le contexte.
+\end{itemize}
+
+\section*{Analyse Critique \& Impact}
+\textbf{1. Lemmatization (spaCy)} : Préserve le sens sémantique (extraction de relations) malgré le coût de calcul, préféré au Stemming.
+\textbf{2. Lowercasing} : Réduit le vocabulaire mais perd la capitalisation (indice NER). \textit{Mitigation} : Conservation du texte original dans une colonne dédiée. Une règle partielle (début de phrase) serait trop fragile (Allemand, listes).
+\textbf{3. Structure Séquentielle} : Pas de vectorisation pour l'export final. Indispensable pour le NER, au prix de fichiers plus volumineux.
+
+\textbf{Impact Suite Projet}
+\textbf{Partie II (NER)} : Nécessitera le texte original (capitalisation) + lemmatisé (embeddings sémantiques).
+\textbf{Partie C (Relations)} : Bénéficie de la lemmatization (normalisation des verbes, simplification des dépendances).
+
+\section*{Démo \& Conclusion}
+Démo : \url{https://jacquesgastebois-projetsemantique.streamlit.app/} (Visualisation, Stats, Pipeline interactif).
+Conclusion : Le preprocessing (compromis bruit/info) offre un socle robuste pour le NER et l'extraction de relations.
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=0.9\linewidth]{pos_distribution.png}
+    \caption{\footnotesize Distribution POS (Noms dominants)}\label{fig:pos}
+    \vspace{0.1cm}
+    \includegraphics[width=0.9\linewidth]{stats_top_words.png}
+    \caption{\footnotesize Top Mots fréquents}\label{fig:words}
+    \vspace{0.1cm}
+    \includegraphics[width=0.9\linewidth]{stats_preprocessing_impact.png}
+    \caption{\footnotesize Impact du Preprocessing}\label{fig:impact}
+\end{figure}
+
+
+\end{document}
